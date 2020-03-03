@@ -1,0 +1,160 @@
+#!venv/bin/python
+
+import json
+import getpass
+import os
+import sys
+import argparse
+import base64
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.fernet import Fernet, InvalidToken
+import pyotp
+
+from config import KEYFILE_PATH, SALT
+
+# path to master key file (used to persist user verification between sessions)
+MASTER_KEY_PATH = sys.path[0]+'/.otp_master_key'
+
+def get_master_key():
+    # Retrieve key from file if available
+    try:
+        with open(MASTER_KEY_PATH, 'rb') as f:
+            master_key = f.read()
+            # Or get from user input
+    except FileNotFoundError:
+        password_provided = getpass.getpass('Enter password: ')
+        password = password_provided.encode() # Convert to type bytes
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=SALT,
+            iterations=100000,
+            backend=default_backend()
+        )
+        master_key = base64.urlsafe_b64encode(kdf.derive(password))
+    return master_key
+
+def get_otp_keys():
+    """
+    Load account names and OTP keys from file
+    """
+    with open(KEYFILE_PATH, 'rb') as f:
+        encrypted = f.read()
+    verified = False
+    # loop until successfully decrypt key file
+    while not verified:
+        master_key = get_master_key()
+        fernet = Fernet(master_key)
+        try:
+            decrypted = fernet.decrypt(encrypted).decode()
+        except InvalidToken:
+            pass
+        else:
+            verified = True
+    # save master key to file
+    with open(MASTER_KEY_PATH, 'wb') as f:
+        f.write(master_key)
+    data = json.loads(decrypted)
+    return data
+
+def main(args):
+    """
+    Print time-based one-time passwords for all accounts
+    """
+    try:
+        data = get_otp_keys()
+    except FileNotFoundError:
+        print("ERROR: Key file missing")
+        return
+    for account, key in sorted(data.items()):
+        totp = pyotp.TOTP(key)
+        print("{:<10} {}".format(account, totp.now()))
+
+def add_account(args):
+    """
+    Register a new account with a corresponding secret key for a time-based
+    one-time-password (OTP).
+    Spaces are removed from the key before storing, but no other validation
+    is performed
+    """
+    try:
+        data = get_otp_keys()
+    except FileNotFoundError:
+        print("Creating new key file...")
+        data = {}
+    data[args.account] = args.key.replace(" ","")
+    datab = json.dumps(data).encode()
+    fernet = Fernet(get_master_key())
+    encrypted = fernet.encrypt(datab)
+    with open(KEYFILE_PATH, 'wb') as f:
+        f.write(encrypted)
+    print("Added account: {}".format(args.account))
+
+def remove_account(args):
+    """
+    Remove an account from the database
+    """
+    print("WARNING: This may be prevent you from signing in to your account!")
+    if not input("Are you sure? (y/n): ").lower().strip()[:1] == "y": return
+    try:
+        data = get_otp_keys()
+    except FileNotFoundError:
+        print("ERROR: Key file missing")
+        return
+    try:
+        del data[args.account]
+    except:
+        print("ERROR: Account not found")
+        return
+    datab = json.dumps(data).encode()
+    fernet = Fernet(get_master_key())
+    encrypted = fernet.encrypt(datab)
+    with open(KEYFILE_PATH, 'wb') as f:
+        f.write(encrypted)
+    print("Deleted account: {}".format(args.account))
+
+def logout(args):
+    """
+    Log out user by deleting master key file
+    """
+    os.remove(MASTER_KEY_PATH)
+
+def export(args):
+    """
+    Decrypt and export OTP keys in plain text (e.g. for manually setting up
+    another 2FA application. Spaces should be ignored by the other application.)
+    """
+    try:
+        data = get_otp_keys()
+    except FileNotFoundError:
+        print("ERROR: Key file missing")
+        return
+    for account, key in sorted(data.items()):
+        key_readable = ' '.join([(key[i:i+4]) for i in range(0, len(key), 4)])
+        print("{:<10} {}".format(account, key_readable))
+
+
+parser = argparse.ArgumentParser(description='One Time Passwords (OTP)')
+parser.set_defaults(func=main)
+subparsers = parser.add_subparsers()
+
+parser_add = subparsers.add_parser('add', help='Add a new account')
+parser_add.add_argument('account', help='Account name')
+parser_add.add_argument('key', help='Secret key')
+parser_add.set_defaults(func=add_account)
+
+parser_remove = subparsers.add_parser('remove', help='Remove an account')
+parser_remove.add_argument('account', help='Account to remove')
+parser_remove.set_defaults(func=remove_account)
+
+parser_logout = subparsers.add_parser('logout', help='Delete credentials')
+parser_logout.set_defaults(func=logout)
+
+parser_export = subparsers.add_parser('export', help='Export OTP keys')
+parser_export.set_defaults(func=export)
+
+if __name__ == '__main__':
+    args = parser.parse_args()
+    args.func(args)
