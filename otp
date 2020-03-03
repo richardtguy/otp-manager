@@ -6,11 +6,12 @@ import os
 import sys
 import argparse
 import base64
+from time import time
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.hashes import SHA1, SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.primitives.twofactor.totp import TOTP
 from cryptography.fernet import Fernet, InvalidToken
-import pyotp
 
 from config import KEYFILE_PATH, SALT
 
@@ -27,7 +28,7 @@ def get_master_key():
         password_provided = getpass.getpass('Enter password: ')
         password = password_provided.encode() # Convert to type bytes
         kdf = PBKDF2HMAC(
-            algorithm=hashes.SHA256(),
+            algorithm=SHA256(),
             length=32,
             salt=SALT,
             iterations=100000,
@@ -69,8 +70,8 @@ def main(args):
         print("ERROR: Key file missing")
         return
     for account, key in sorted(data.items()):
-        totp = pyotp.TOTP(key)
-        print("{:<10} {}".format(account, totp.now()))
+        totp = TOTP(key.encode(), 6, SHA256(), 30, backend=default_backend())
+        print("{:<10} {}".format(account, totp.generate(time()).decode()))
 
 def add_account(args):
     """

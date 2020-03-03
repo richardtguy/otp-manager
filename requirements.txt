@@ -1,5 +1,4 @@
 cffi==1.14.0
 cryptography==2.8
 pycparser==2.19
-pyotp==2.3.0
 six==1.14.0
