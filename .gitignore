@@ -1,0 +1,19 @@
+# Master key file
+.otp_master_key
+
+# Installation-specific config
+config.py
+
+# Alias for dock link
+2FA
+
+# macOS custom attributes
+.DS_Store
+
+# Python byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environment
+venv/

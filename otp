@@ -69,7 +69,11 @@ def main(args):
     except FileNotFoundError:
         print("ERROR: Key file missing")
         return
-    for account, key in sorted(data.items()):
+    accounts = filter(
+        lambda x: x[0].upper()==args.account.upper() or args.account=='all',
+        data.items()
+    )
+    for account, key in sorted(accounts):
         missing_padding = len(key) % 8
         if missing_padding != 0:
             key += '=' * (8 - missing_padding)
@@ -149,6 +153,8 @@ def export(args):
 
 
 parser = argparse.ArgumentParser(description='One Time Passwords (OTP)')
+parser.add_argument('-a', '--account', help='Get OTP for (only) this account',
+    default='all')
 parser.set_defaults(func=main)
 subparsers = parser.add_subparsers()
 
