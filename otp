@@ -1,4 +1,4 @@
-#!venv/bin/python
+#!/Users/richardguy/utils/otp-manager/venv/bin/python
 
 import json
 import getpass
@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives.hashes import SHA1, SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.twofactor.totp import TOTP
 from cryptography.fernet import Fernet, InvalidToken
+from PySide6 import QtCore, QtWidgets, QtGui
 
 from config import KEYFILE_PATH, SALT
 
@@ -19,6 +20,9 @@ from config import KEYFILE_PATH, SALT
 MASTER_KEY_PATH = sys.path[0]+'/.otp_master_key'
 
 def get_master_key():
+    """
+    TODO: Move password request to GUI (dialog box)
+    """
     # Retrieve key from file if available
     try:
         with open(MASTER_KEY_PATH, 'rb') as f:
@@ -60,33 +64,63 @@ def get_otp_keys():
     data = json.loads(decrypted)
     return data
 
+class MyWidget(QtWidgets.QWidget):
+    def __init__(self, data, parent=None):
+        super(MyWidget, self).__init__(parent)
+        self.data = data
+        self.labels = {}
+        self.setWindowTitle("OTP Manager")
+        self.setMinimumWidth(200)
+        for account, key in self.data.items():
+            accountLabel = QtWidgets.QLabel(account, alignment=QtCore.Qt.AlignLeft)
+            otpLabel = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
+            otpLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.labels[account] = {"accountLabel": accountLabel, "otpLabel": otpLabel}
+
+        layout = QtWidgets.QGridLayout()
+        for n, label in enumerate(self.labels.values()):
+            layout.addWidget(label["accountLabel"], n, 0)
+            layout.addWidget(label["otpLabel"], n, 1)
+
+        self.refresh()
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self.refresh)
+        self.timer.start(1000)
+
+        self.setLayout(layout)
+
+    def refresh(self):
+        """
+        Print time-based one-time passwords for all accounts
+        """
+        for account, key in self.data.items():
+            missing_padding = len(key) % 8
+            if missing_padding != 0:
+                key += '=' * (8 - missing_padding)
+            byte_key = b32decode(key, casefold=True)
+            totp = TOTP(
+                byte_key,
+                6,
+                SHA1(),
+                30,
+                backend=default_backend(),
+                enforce_key_length=False
+            )
+            otp = totp.generate(time()).decode()
+            self.labels[account]["otpLabel"].setText(otp)
+
+
 def main(args):
     """
-    Print time-based one-time passwords for all accounts
+    Render main window
     """
-    try:
-        data = get_otp_keys()
-    except FileNotFoundError:
-        print("ERROR: Key file missing")
-        return
-    accounts = filter(
-        lambda x: x[0].upper()==args.account.upper() or args.account=='all',
-        data.items()
-    )
-    for account, key in sorted(accounts):
-        missing_padding = len(key) % 8
-        if missing_padding != 0:
-            key += '=' * (8 - missing_padding)
-        byte_key = b32decode(key, casefold=True)
-        totp = TOTP(
-            byte_key,
-            6,
-            SHA1(),
-            30,
-            backend=default_backend(),
-            enforce_key_length=False
-        )
-        print("{:<10} {}".format(account, totp.generate(time()).decode()))
+    data = get_otp_keys()
+    app = QtWidgets.QApplication([])
+    widget = MyWidget(data)
+    widget.show()
+
+    sys.exit(app.exec_())
+
 
 def add_account(args):
     """
@@ -94,6 +128,7 @@ def add_account(args):
     one-time-password (OTP).
     Spaces are removed from the key before storing, but no other validation
     is performed
+    TODO: Move to GUI
     """
     try:
         data = get_otp_keys()
@@ -111,6 +146,7 @@ def add_account(args):
 def remove_account(args):
     """
     Remove an account from the database
+    TODO: Move to GUI
     """
     print("WARNING: This may be prevent you from signing in to your account!")
     if not input("Are you sure? (y/n): ").lower().strip()[:1] == "y": return
@@ -134,6 +170,7 @@ def remove_account(args):
 def logout(args):
     """
     Log out user by deleting master key file
+    TODO: Move to GUI
     """
     os.remove(MASTER_KEY_PATH)
 
@@ -141,6 +178,7 @@ def export(args):
     """
     Decrypt and export OTP keys in plain text (e.g. for manually setting up
     another 2FA application. Spaces should be ignored by the other application.)
+    TODO: Move to GUI
     """
     try:
         data = get_otp_keys()
@@ -153,8 +191,6 @@ def export(args):
 
 
 parser = argparse.ArgumentParser(description='One Time Passwords (OTP)')
-parser.add_argument('-a', '--account', help='Get OTP for (only) this account',
-    default='all')
 parser.set_defaults(func=main)
 subparsers = parser.add_subparsers()
 
