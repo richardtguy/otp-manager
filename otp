@@ -64,36 +64,81 @@ def get_otp_keys():
     data = json.loads(decrypted)
     return data
 
-class MyWidget(QtWidgets.QWidget):
-    def __init__(self, data, parent=None):
-        super(MyWidget, self).__init__(parent)
-        self.data = data
-        self.labels = {}
-        self.setWindowTitle("OTP Manager")
-        self.setMinimumWidth(200)
-        for account, key in self.data.items():
-            accountLabel = QtWidgets.QLabel(account, alignment=QtCore.Qt.AlignLeft)
-            otpLabel = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
-            otpLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-            self.labels[account] = {"accountLabel": accountLabel, "otpLabel": otpLabel}
+class OTPModel():
+    """
+    OTP Manager Model
+    """
+    def __init__(self, master_key_path, keyfile_path, salt):
+        self.keyfile_path = keyfile_path
+        self.master_key_path = master_key_path
+        self.salt = salt
+        self._master_key = self._get_master_key()
 
-        layout = QtWidgets.QGridLayout()
-        for n, label in enumerate(self.labels.values()):
-            layout.addWidget(label["accountLabel"], n, 0)
-            layout.addWidget(label["otpLabel"], n, 1)
-
-        self.refresh()
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self.refresh)
-        self.timer.start(1000)
-
-        self.setLayout(layout)
-
-    def refresh(self):
+    def _get_master_key(self, password=None):
         """
-        Print time-based one-time passwords for all accounts
+        Return saved master key if available, or use password
         """
-        for account, key in self.data.items():
+        # Retrieve key from file if available
+        try:
+            with open(self.master_key_path, 'rb') as f:
+                master_key = f.read()
+                # Or get from user input
+        except FileNotFoundError:
+            if password:
+                kdf = PBKDF2HMAC(
+                    algorithm=SHA256(),
+                    length=32,
+                    salt=self.salt,
+                    iterations=100000,
+                    backend=default_backend()
+                )
+                master_key = urlsafe_b64encode(kdf.derive(password.encode()))
+                # save master key to file
+                with open(self.master_key_path, 'wb') as f:
+                    f.write(master_key)
+                return master_key
+            else:
+                return None
+        return master_key
+
+    def _decrypt_otp_keys(self):
+        """
+        Load and decrypt account names and OTP keys from file
+        """
+        with open(self.keyfile_path, 'rb') as f:
+            encrypted = f.read()
+        master_key = self._master_key
+        if master_key ==  None:
+            return None
+        fernet = Fernet(master_key)
+        try:
+            decrypted = fernet.decrypt(encrypted).decode()
+        except InvalidToken:
+            return None
+        return json.loads(decrypted)
+
+    @property
+    def verified(self):
+        self._otp_keys = self._decrypt_otp_keys()
+        if self._otp_keys:
+            self._verified = True
+        else:
+            self._verified = False
+        return self._verified
+
+    @property
+    def otp_keys(self):
+        if self.verified:
+            return self._otp_keys
+        else:
+            return None
+
+    def verify_with_password(self, password):
+        self._master_key = self._get_master_key(password)
+
+    def get_otps(self):
+        otps = {}
+        for account, key in self._otp_keys.items():
             missing_padding = len(key) % 8
             if missing_padding != 0:
                 key += '=' * (8 - missing_padding)
@@ -107,18 +152,80 @@ class MyWidget(QtWidgets.QWidget):
                 enforce_key_length=False
             )
             otp = totp.generate(time()).decode()
+            otps[account] = otp
+        return otps
+
+class OTPUi(QtWidgets.QWidget):
+    """
+    OTP Manager GUI
+    """
+    def __init__(self, parent=None):
+        super(OTPUi, self).__init__(parent)
+        self.setWindowTitle("OTP Manager")
+        self.setMinimumWidth(200)
+        self.mainLayout = QtWidgets.QGridLayout()
+        self.setLayout(self.mainLayout)
+
+    def createOTPLabels(self, data):
+        """
+        Create labels for each account
+        """
+        self.labels = {}
+        for account, key in data.items():
+            accountLabel = QtWidgets.QLabel(account, alignment=QtCore.Qt.AlignLeft)
+            otpLabel = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
+            otpLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.labels[account] = {"accountLabel": accountLabel, "otpLabel": otpLabel}
+
+        for n, label in enumerate(self.labels.values()):
+            self.mainLayout.addWidget(label["accountLabel"], n, 0)
+            self.mainLayout.addWidget(label["otpLabel"], n, 1)
+
+    def setOTPLabels(self, data):
+        """
+        Refresh time-based one-time passwords for all accounts
+        """
+        for account, otp in data.items():
             self.labels[account]["otpLabel"].setText(otp)
+
+class OTPCtrl():
+    """
+    OTP Manager Controller
+    """
+    def __init__(self, model, view):
+        self._model = model
+        self._view = view
+        # populate UI with initial data
+        data = self._model.otp_keys
+        self._view.createOTPLabels(data)
+        self._updateOTPs()
+        # connect timer to refresh display
+        self._connectTimers()
+        # connect signals and slots
+        self._connectSignals()
+
+    def _updateOTPs(self):
+        otps = self._model.get_otps()
+        self._view.setOTPLabels(otps)
+
+    def _connectTimers(self):
+        self.timer = QtCore.QTimer()
+        self.timer.timeout.connect(self._updateOTPs)
+        self.timer.start(1000)
+
+    def _connectSignals(self):
+        pass
 
 
 def main(args):
     """
     Render main window
     """
-    data = get_otp_keys()
     app = QtWidgets.QApplication([])
-    widget = MyWidget(data)
-    widget.show()
-
+    view = OTPUi()
+    view.show()
+    model = OTPModel(MASTER_KEY_PATH, KEYFILE_PATH, SALT)
+    controller = OTPCtrl(model=model, view=view)
     sys.exit(app.exec_())
 
 
