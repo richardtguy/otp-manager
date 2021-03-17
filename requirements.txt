@@ -1,6 +1,6 @@
 cffi==1.14.0
 cryptography==2.8
 pycparser==2.19
-PySide6==6.0.1
+PySide6
 shiboken6==6.0.1
 six==1.14.0

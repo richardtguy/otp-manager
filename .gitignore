@@ -1,11 +1,9 @@
 # Master key file
 .otp_master_key
+.otp_keys
 
 # Installation-specific config
 config.py
-
-# Alias for dock link
-2FA
 
 # macOS custom attributes
 .DS_Store

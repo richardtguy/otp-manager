@@ -1,4 +1,4 @@
-#!/Users/richardguy/utils/otp-manager/venv/bin/python
+#!/Users/richardguy/Developer/otp-manager/venv/bin/python
 
 import json
 import getpass
@@ -6,18 +6,27 @@ import os
 import sys
 import argparse
 from base64 import urlsafe_b64encode, b32decode
+import binascii
 from time import time
+from functools import partial
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.hashes import SHA1, SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.twofactor.totp import TOTP
 from cryptography.fernet import Fernet, InvalidToken
 from PySide6 import QtCore, QtWidgets, QtGui
+# TODO: import objects from QtWidgets (e.g. QDialog)
 
-from config import KEYFILE_PATH, SALT
+from config import KEYFILE_PATH, SALT, MASTER_KEY_PATH
 
-# path to master key file (used to persist user verification between sessions)
-MASTER_KEY_PATH = sys.path[0]+'/.otp_master_key'
+class OTPError(Exception):
+    """Base class for exceptions"""
+    pass
+
+class MissingKeyFileError(OTPError):
+    """Exception raised if key file is missing"""
+    def __init__(self, message):
+        self.message = message
 
 class OTPModel():
     """
@@ -56,12 +65,15 @@ class OTPModel():
                 f.write(master_key)
             return master_key
 
-    def _decrypt_otp_keys(self):
+    def _load_otp_keys(self):
         """
         Load and decrypt account names and OTP keys from file
         """
-        with open(self.keyfile_path, 'rb') as f:
-            encrypted = f.read()
+        try:
+            with open(self.keyfile_path, 'rb') as f:
+                encrypted = f.read()
+        except FileNotFoundError as exc:
+            raise MissingKeyFileError("Missing key file") from exc
         master_key = self._master_key
         if master_key ==  None:
             return None
@@ -72,17 +84,23 @@ class OTPModel():
             return None
         return json.loads(decrypted)
 
+    def _save_otp_keys(self):
+        datab = json.dumps(self._otp_keys).encode()
+        fernet = Fernet(self._get_master_key())
+        encrypted = fernet.encrypt(datab)
+        with open(KEYFILE_PATH, 'wb') as f:
+            f.write(encrypted)
+
     @property
     def verified(self):
-        self._otp_keys = self._decrypt_otp_keys()
-        if self._otp_keys:
+        self._otp_keys = self._load_otp_keys()
+        if self._otp_keys or self._otp_keys == {}:
             self._verified = True
         else:
             self._verified = False
         return self._verified
 
-    @property
-    def otp_keys(self):
+    def get_otp_keys(self):
         if self.verified:
             return self._otp_keys
         else:
@@ -94,13 +112,23 @@ class OTPModel():
     def logout(self):
         os.remove(MASTER_KEY_PATH)
 
+    def create_key_file(self, password):
+        self.logout()
+        self._otp_keys = {}
+        self.verify_with_password(password)
+        self._save_otp_keys()
+
     def get_otps(self):
         otps = {}
         for account, key in self._otp_keys.items():
             missing_padding = len(key) % 8
             if missing_padding != 0:
                 key += '=' * (8 - missing_padding)
-            byte_key = b32decode(key, casefold=True)
+            try:
+                byte_key = b32decode(key, casefold=True)
+            except binascii.Error:
+                otps[account] = None
+                break
             totp = TOTP(
                 byte_key,
                 6,
@@ -113,52 +141,147 @@ class OTPModel():
             otps[account] = otp
         return otps
 
-class OTPUi(QtWidgets.QWidget):
+    def add_otp_key(self, data):
+        self._otp_keys[data["account"]] = data["key"].replace(" ","")
+        self._save_otp_keys()
+
+    def del_otp_key(self, account):
+        self._otp_keys.pop(account)
+        self._save_otp_keys()
+
+class OTPUi(QtWidgets.QDialog):
     """
     OTP Manager GUI
     """
     def __init__(self, parent=None):
         super(OTPUi, self).__init__(parent)
         self.setWindowTitle("OTP Manager")
-        self.setMinimumWidth(200)
         self._mainLayout = QtWidgets.QVBoxLayout()
         self._otpLayout = QtWidgets.QGridLayout()
         self._mainLayout.addLayout(self._otpLayout)
         self.logoutBtn = QtWidgets.QPushButton("Logout")
-        self._mainLayout.addWidget(self.logoutBtn)
+        self.addBtn = QtWidgets.QPushButton("Add")
+        buttonBox = QtWidgets.QDialogButtonBox()
+        buttonBox.addButton(self.addBtn, QtWidgets.QDialogButtonBox.ActionRole)
+        buttonBox.addButton(self.logoutBtn, QtWidgets.QDialogButtonBox.ActionRole)
+        self._mainLayout.addWidget(buttonBox)
         self.setLayout(self._mainLayout)
+        self.rows = {}
 
-    def createOTPLabels(self, data):
-        """
-        Create label for each account
-        """
-        self.labels = {}
-        for account, key in data.items():
-            accountLabel = QtWidgets.QLabel(account, alignment=QtCore.Qt.AlignLeft)
-            otpLabel = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
-            otpLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-            self.labels[account] = {"accountLabel": accountLabel, "otpLabel": otpLabel}
-
-        for n, label in enumerate(self.labels.values()):
-            self._otpLayout.addWidget(label["accountLabel"], n, 0)
-            self._otpLayout.addWidget(label["otpLabel"], n, 1)
+    def createRow(self, account):
+        accountLabel = QtWidgets.QLabel(account, alignment=QtCore.Qt.AlignLeft)
+        otpLabel = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
+        otpLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        showBtn = QtWidgets.QPushButton("Show")
+        deleteBtn = QtWidgets.QPushButton("Delete")
+        widgets = {
+            "accountLabel": accountLabel, "otpLabel": otpLabel,
+            "showBtn": showBtn, "deleteBtn": deleteBtn
+        }
+        self.rows[account] = widgets
+        i = len(self.rows)
+        for n, widget in enumerate(widgets.values()):
+            self._otpLayout.addWidget(widget, i, n)
+        return widgets
 
     def setOTPs(self, data):
         """
         Refresh time-based one-time passwords for all accounts
         """
         for account, otp in data.items():
-            self.labels[account]["otpLabel"].setText(otp)
+            try:
+                label = self.rows[account]
+            except KeyError:
+                label = self._createRow(account)
+            if otp == None: otp = "Invalid key!"
+            label["otpLabel"].setText(otp)
 
     def getPassword(self):
         """
         Show dialog box to get password from user
         """
-        text, ok = QtWidgets.QInputDialog.getText(self, "OTP Manager", "Enter password:", QtWidgets.QLineEdit.Password)
+        text, ok = QtWidgets.QInputDialog.getText(
+            self, "OTP Manager", "Enter password:",
+            QtWidgets.QLineEdit.Password
+        )
         if ok:
             return text
         else:
             return False
+
+    def getNewPassword(self):
+        """
+        Show dialog box to get new password from user
+        """
+        text, ok = QtWidgets.QInputDialog.getText(
+            self, "OTP Manager", "Enter new password:",
+            QtWidgets.QLineEdit.Password
+        )
+        if ok:
+            return text
+        else:
+            return False
+
+    def getConfirmation(self):
+        msg = QtWidgets.QMessageBox()
+        msg.setText("Are you sure?")
+        msg.setIcon(QtWidgets.QMessageBox.Warning)
+        msg.setStandardButtons(QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel)
+        if msg.exec() == QtWidgets.QMessageBox.Ok:
+            return True
+
+    def showKey(self, key):
+        """
+        Display OTP key
+        """
+        msg = QtWidgets.QMessageBox()
+        key_readable = ' '.join([(key[i:i+4]) for i in range(0, len(key), 4)])
+        msg.setText(key_readable)
+        msg.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        msg.exec()
+
+    def removeAccount(self, account):
+        """
+        Remove account from UI
+        """
+        for w in self.rows[account].values():
+            self._otpLayout.removeWidget(w)
+            w.deleteLater()
+        del(self.rows[account])
+
+    def getNewAccount(self):
+        """
+        Show dialog box to get new account details
+        """
+        form = addAccountForm()
+        if form.exec():
+            return {"account": form.account.text(), "key": form.token.text()}
+        else:
+            return None
+
+class addAccountForm(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super(addAccountForm, self).__init__(parent)
+        self.setWindowTitle("OTP Manager")
+        # Create widgets
+        self.accountLabel = QtWidgets.QLabel("Account:")
+        self.account = QtWidgets.QLineEdit()
+        self.tokenLabel = QtWidgets.QLabel("Token:")
+        self.token = QtWidgets.QLineEdit()
+        buttons = QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        self.buttonBox = QtWidgets.QDialogButtonBox(buttons)
+        # Connect signals
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+        # Create layout and add widgets
+        layout = QtWidgets.QVBoxLayout()
+        layout.addWidget(self.accountLabel)
+        layout.addWidget(self.account)
+        layout.addWidget(self.tokenLabel)
+        layout.addWidget(self.token)
+        layout.addWidget(self.buttonBox)
+        # Set dialog layout
+        self.setLayout(layout)
 
 class OTPCtrl():
     """
@@ -168,39 +291,57 @@ class OTPCtrl():
         self._model = model
         self._view = view
         # authenticate
-        while not self._model.verified:
-            self._model.verify_with_password(self._view.getPassword())
-        # TODO: handle "Cancel" more elegantly
+        try:
+            while not self._model.verified:
+                self._model.verify_with_password(self._view.getPassword())
+        except MissingKeyFileError:
+            new_password = self._view.getNewPassword()
+            if new_password:
+                # create new key file and encrypt with new password
+                self._model.create_key_file(new_password)
+            else:
+                self._view.close()
         # populate UI with initial data
-        data = self._model.otp_keys
-        self._view.createOTPLabels(data)
+        for account, key in self._model.get_otp_keys().items():
+            self._createRow(account, key)
         self._updateOTPs()
         # connect timer to refresh display
         self._connectTimers()
         # connect signals and slots
-        self._connectSignals()
+        self._view.logoutBtn.clicked.connect(self._logout)
+        self._view.addBtn.clicked.connect(self._addAccount)
+
+    def _createRow(self, account, key):
+        self._view.createRow(account)
+        self._view.rows[account]["showBtn"].clicked.connect(
+            partial(self._view.showKey, key))
+        self._view.rows[account]["deleteBtn"].clicked.connect(
+            partial(self._deleteAccount, account))
 
     def _updateOTPs(self):
-        otps = self._model.get_otps()
-        self._view.setOTPs(otps)
+        self._view.setOTPs(self._model.get_otps())
 
     def _logout(self):
         self._model.logout()
         self._view.close()
 
+    def _addAccount(self):
+        new_account = self._view.getNewAccount()
+        if new_account:
+            self._model.add_otp_key(new_account)
+            self._createRow(new_account['account'], new_account['key'])
+
+    def _deleteAccount(self, account):
+        if self._view.getConfirmation():
+            self._model.del_otp_key(account)
+            self._view.removeAccount(account)
+
     def _connectTimers(self):
-        self.timer = QtCore.QTimer()
-        self.timer.timeout.connect(self._updateOTPs)
-        self.timer.start(1000)
+        self._timer = QtCore.QTimer()
+        self._timer.timeout.connect(self._updateOTPs)
+        self._timer.start(1000)
 
-    def _connectSignals(self):
-        self._view.logoutBtn.clicked.connect(self._logout)
-
-
-def main(args):
-    """
-    Render main window
-    """
+def main():
     app = QtWidgets.QApplication([])
     view = OTPUi()
     view.show()
@@ -208,84 +349,5 @@ def main(args):
     controller = OTPCtrl(model=model, view=view)
     sys.exit(app.exec_())
 
-
-def add_account(args):
-    """
-    Register a new account with a corresponding secret key for a time-based
-    one-time-password (OTP).
-    Spaces are removed from the key before storing, but no other validation
-    is performed
-    TODO: Move to GUI
-    """
-    try:
-        data = get_otp_keys()
-    except FileNotFoundError:
-        print("Creating new key file...")
-        data = {}
-    data[args.account] = args.key.replace(" ","")
-    datab = json.dumps(data).encode()
-    fernet = Fernet(get_master_key())
-    encrypted = fernet.encrypt(datab)
-    with open(KEYFILE_PATH, 'wb') as f:
-        f.write(encrypted)
-    print("Added account: {}".format(args.account))
-
-def remove_account(args):
-    """
-    Remove an account from the database
-    TODO: Move to GUI
-    """
-    print("WARNING: This may be prevent you from signing in to your account!")
-    if not input("Are you sure? (y/n): ").lower().strip()[:1] == "y": return
-    try:
-        data = get_otp_keys()
-    except FileNotFoundError:
-        print("ERROR: Key file missing")
-        return
-    try:
-        del data[args.account]
-    except:
-        print("ERROR: Account not found")
-        return
-    datab = json.dumps(data).encode()
-    fernet = Fernet(get_master_key())
-    encrypted = fernet.encrypt(datab)
-    with open(KEYFILE_PATH, 'wb') as f:
-        f.write(encrypted)
-    print("Deleted account: {}".format(args.account))
-
-def export(args):
-    """
-    Decrypt and export OTP keys in plain text (e.g. for manually setting up
-    another 2FA application. Spaces should be ignored by the other application.)
-    TODO: Move to GUI
-    """
-    try:
-        data = get_otp_keys()
-    except FileNotFoundError:
-        print("ERROR: Key file missing")
-        return
-    for account, key in sorted(data.items()):
-        key_readable = ' '.join([(key[i:i+4]) for i in range(0, len(key), 4)])
-        print("{:<10} {}".format(account, key_readable))
-
-
-parser = argparse.ArgumentParser(description='One Time Passwords (OTP)')
-parser.set_defaults(func=main)
-subparsers = parser.add_subparsers()
-
-parser_add = subparsers.add_parser('add', help='Add a new account')
-parser_add.add_argument('account', help='Account name')
-parser_add.add_argument('key', help='Secret key')
-parser_add.set_defaults(func=add_account)
-
-parser_remove = subparsers.add_parser('remove', help='Remove an account')
-parser_remove.add_argument('account', help='Account to remove')
-parser_remove.set_defaults(func=remove_account)
-
-parser_export = subparsers.add_parser('export', help='Export OTP keys')
-parser_export.set_defaults(func=export)
-
 if __name__ == '__main__':
-    args = parser.parse_args()
-    args.func(args)
+    main()
