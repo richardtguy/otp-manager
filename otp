@@ -6,13 +6,15 @@ import sys
 from base64 import urlsafe_b64encode, b32decode
 import binascii
 from time import time
+import qrcode
+from PIL.ImageQt import ImageQt
 from functools import partial
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.hashes import SHA1, SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.twofactor.totp import TOTP
 from cryptography.fernet import Fernet, InvalidToken
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QIcon, QPixmap, QImage
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QGridLayout, QPushButton, QDialogButtonBox, QLabel,
@@ -154,6 +156,20 @@ class OTPModel():
         self._otp_keys.pop(account)
         self._save_otp_keys()
 
+    def get_key(self, account):
+        """
+        Return the TOTP key for the account as plain text
+        """
+        return self._otp_keys[account]
+
+    def get_qrcode(self, account):
+        """
+        Return a PIL image of QR code encoding the OTP Auth URI for the account
+        """
+        uri = f"otpauth://totp/{account}?secret={self._otp_keys[account]}"
+        img = qrcode.make(uri)
+        return img
+
 class OTPUi(QDialog):
     """
     OTP Manager GUI
@@ -183,7 +199,7 @@ class OTPUi(QDialog):
         otpLabel = QLabel("", alignment=Qt.AlignCenter)
         otpLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
         showBtn = QPushButton()
-        showBtn.setIcon(QIcon(f"{base_path}/icons/eye-solid.svg"))
+        showBtn.setIcon(QIcon(f"{base_path}/icons/qrcode-solid.svg"))
         showBtn.setStyleSheet("background-color: rgba(255, 255, 255, 0);")
         deleteBtn = QPushButton()
         deleteBtn.setIcon(QIcon(f"{base_path}/icons/trash-alt-solid.svg"))
@@ -244,13 +260,28 @@ class OTPUi(QDialog):
         if msg.exec() == QMessageBox.Ok:
             return True
 
+    def showQRCode(self, qrcode):
+        """
+        Display OTP key as QR code
+        """
+        msg = QDialog()
+        imageLabel = QLabel()
+        qim = ImageQt(qrcode)
+        imageLabel.setPixmap(QPixmap.fromImage(qim));
+        layout = QVBoxLayout()
+        layout.addWidget(imageLabel)
+        buttonBox = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttonBox.accepted.connect(msg.accept)
+        layout.addWidget(buttonBox)
+        msg.setLayout(layout)
+        msg.exec()
+
     def showKey(self, key):
         """
-        Display OTP key
+        Display OTP key as text
         """
         msg = QMessageBox()
-        key_readable = ' '.join([(key[i:i+4]) for i in range(0, len(key), 4)])
-        msg.setText(key_readable)
+        msg.setText(key)
         msg.setStandardButtons(QMessageBox.Ok)
         msg.exec()
 
@@ -280,7 +311,7 @@ class addAccountForm(QDialog):
         # Create widgets
         self.accountLabel = QLabel("Account:")
         self.account = QLineEdit()
-        self.tokenLabel = QLabel("Token:")
+        self.tokenLabel = QLabel("TOTP key:")
         self.token = QLineEdit()
         buttons = QDialogButtonBox.Ok | QDialogButtonBox.Cancel
         self.buttonBox = QDialogButtonBox(buttons)
@@ -328,7 +359,7 @@ class OTPCtrl():
     def _createRow(self, account, key):
         self._view.createRow(account)
         self._view.rows[account]["showBtn"].clicked.connect(
-            partial(self._view.showKey, key))
+            partial(self._showQRCode, account))
         self._view.rows[account]["deleteBtn"].clicked.connect(
             partial(self._deleteAccount, account))
 
@@ -344,6 +375,10 @@ class OTPCtrl():
         if new_account:
             self._model.add_otp_key(new_account)
             self._createRow(new_account['account'], new_account['key'])
+
+    def _showQRCode(self, account):
+        qrcode = self._model.get_qrcode(account)
+        self._view.showQRCode(qrcode)
 
     def _deleteAccount(self, account):
         if self._view.getConfirmation():
