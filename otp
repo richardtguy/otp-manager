@@ -1,10 +1,8 @@
 #!/Users/richardguy/Developer/otp-manager/venv/bin/python
 
 import json
-import getpass
 import os
 import sys
-import argparse
 from base64 import urlsafe_b64encode, b32decode
 import binascii
 from time import time
@@ -14,10 +12,17 @@ from cryptography.hazmat.primitives.hashes import SHA1, SHA256
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives.twofactor.totp import TOTP
 from cryptography.fernet import Fernet, InvalidToken
-from PySide6 import QtCore, QtWidgets, QtGui
+from PySide6.QtGui import QIcon
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QGridLayout, QPushButton, QDialogButtonBox, QLabel,
+    QInputDialog, QLineEdit, QMessageBox, QApplication
+)
 # TODO: import objects from QtWidgets (e.g. QDialog)
 
 from config import KEYFILE_PATH, SALT, MASTER_KEY_PATH
+
+base_path = os.path.dirname(__file__)
 
 class OTPError(Exception):
     """Base class for exceptions"""
@@ -149,31 +154,40 @@ class OTPModel():
         self._otp_keys.pop(account)
         self._save_otp_keys()
 
-class OTPUi(QtWidgets.QDialog):
+class OTPUi(QDialog):
     """
     OTP Manager GUI
     """
     def __init__(self, parent=None):
         super(OTPUi, self).__init__(parent)
         self.setWindowTitle("OTP Manager")
-        self._mainLayout = QtWidgets.QVBoxLayout()
-        self._otpLayout = QtWidgets.QGridLayout()
+        self._mainLayout = QVBoxLayout()
+        self._otpLayout = QGridLayout()
         self._mainLayout.addLayout(self._otpLayout)
-        self.logoutBtn = QtWidgets.QPushButton("Logout")
-        self.addBtn = QtWidgets.QPushButton("Add")
-        buttonBox = QtWidgets.QDialogButtonBox()
-        buttonBox.addButton(self.addBtn, QtWidgets.QDialogButtonBox.ActionRole)
-        buttonBox.addButton(self.logoutBtn, QtWidgets.QDialogButtonBox.ActionRole)
+        self.logoutBtn = QPushButton()
+        self.logoutBtn.setIcon(QIcon(f"{base_path}/icons/sign-out-alt-solid.svg"))
+        self.logoutBtn.setStyleSheet("background-color: rgba(255, 255, 255, 0);")
+        self.addBtn = QPushButton()
+        self.addBtn.setIcon(QIcon(f"{base_path}/icons/plus-square-solid.svg"))
+        self.addBtn.setStyleSheet("background-color: rgba(255, 255, 255, 0);")
+        buttonBox = QDialogButtonBox()
+        buttonBox.addButton(self.addBtn, QDialogButtonBox.ActionRole)
+        buttonBox.addButton(self.logoutBtn, QDialogButtonBox.ActionRole)
+        buttonBox.setCenterButtons(True)
         self._mainLayout.addWidget(buttonBox)
         self.setLayout(self._mainLayout)
         self.rows = {}
 
     def createRow(self, account):
-        accountLabel = QtWidgets.QLabel(account, alignment=QtCore.Qt.AlignLeft)
-        otpLabel = QtWidgets.QLabel("", alignment=QtCore.Qt.AlignCenter)
-        otpLabel.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        showBtn = QtWidgets.QPushButton("Show")
-        deleteBtn = QtWidgets.QPushButton("Delete")
+        accountLabel = QLabel(account, alignment=Qt.AlignLeft)
+        otpLabel = QLabel("", alignment=Qt.AlignCenter)
+        otpLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        showBtn = QPushButton()
+        showBtn.setIcon(QIcon(f"{base_path}/icons/eye-solid.svg"))
+        showBtn.setStyleSheet("background-color: rgba(255, 255, 255, 0);")
+        deleteBtn = QPushButton()
+        deleteBtn.setIcon(QIcon(f"{base_path}/icons/trash-alt-solid.svg"))
+        deleteBtn.setStyleSheet("background-color: rgba(255, 255, 255, 0);")
         widgets = {
             "accountLabel": accountLabel, "otpLabel": otpLabel,
             "showBtn": showBtn, "deleteBtn": deleteBtn
@@ -200,9 +214,9 @@ class OTPUi(QtWidgets.QDialog):
         """
         Show dialog box to get password from user
         """
-        text, ok = QtWidgets.QInputDialog.getText(
+        text, ok = QInputDialog.getText(
             self, "OTP Manager", "Enter password:",
-            QtWidgets.QLineEdit.Password
+            QLineEdit.Password
         )
         if ok:
             return text
@@ -213,9 +227,9 @@ class OTPUi(QtWidgets.QDialog):
         """
         Show dialog box to get new password from user
         """
-        text, ok = QtWidgets.QInputDialog.getText(
+        text, ok = QInputDialog.getText(
             self, "OTP Manager", "Enter new password:",
-            QtWidgets.QLineEdit.Password
+            QLineEdit.Password
         )
         if ok:
             return text
@@ -223,21 +237,21 @@ class OTPUi(QtWidgets.QDialog):
             return False
 
     def getConfirmation(self):
-        msg = QtWidgets.QMessageBox()
+        msg = QMessageBox()
         msg.setText("Are you sure?")
-        msg.setIcon(QtWidgets.QMessageBox.Warning)
-        msg.setStandardButtons(QtWidgets.QMessageBox.Ok | QtWidgets.QMessageBox.Cancel)
-        if msg.exec() == QtWidgets.QMessageBox.Ok:
+        msg.setIcon(QMessageBox.Warning)
+        msg.setStandardButtons(QMessageBox.Ok | QMessageBox.Cancel)
+        if msg.exec() == QMessageBox.Ok:
             return True
 
     def showKey(self, key):
         """
         Display OTP key
         """
-        msg = QtWidgets.QMessageBox()
+        msg = QMessageBox()
         key_readable = ' '.join([(key[i:i+4]) for i in range(0, len(key), 4)])
         msg.setText(key_readable)
-        msg.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        msg.setStandardButtons(QMessageBox.Ok)
         msg.exec()
 
     def removeAccount(self, account):
@@ -259,22 +273,22 @@ class OTPUi(QtWidgets.QDialog):
         else:
             return None
 
-class addAccountForm(QtWidgets.QDialog):
+class addAccountForm(QDialog):
     def __init__(self, parent=None):
         super(addAccountForm, self).__init__(parent)
         self.setWindowTitle("OTP Manager")
         # Create widgets
-        self.accountLabel = QtWidgets.QLabel("Account:")
-        self.account = QtWidgets.QLineEdit()
-        self.tokenLabel = QtWidgets.QLabel("Token:")
-        self.token = QtWidgets.QLineEdit()
-        buttons = QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
-        self.buttonBox = QtWidgets.QDialogButtonBox(buttons)
+        self.accountLabel = QLabel("Account:")
+        self.account = QLineEdit()
+        self.tokenLabel = QLabel("Token:")
+        self.token = QLineEdit()
+        buttons = QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        self.buttonBox = QDialogButtonBox(buttons)
         # Connect signals
         self.buttonBox.accepted.connect(self.accept)
         self.buttonBox.rejected.connect(self.reject)
         # Create layout and add widgets
-        layout = QtWidgets.QVBoxLayout()
+        layout = QVBoxLayout()
         layout.addWidget(self.accountLabel)
         layout.addWidget(self.account)
         layout.addWidget(self.tokenLabel)
@@ -337,12 +351,12 @@ class OTPCtrl():
             self._view.removeAccount(account)
 
     def _connectTimers(self):
-        self._timer = QtCore.QTimer()
+        self._timer = QTimer()
         self._timer.timeout.connect(self._updateOTPs)
         self._timer.start(1000)
 
 def main():
-    app = QtWidgets.QApplication([])
+    app = QApplication([])
     view = OTPUi()
     view.show()
     model = OTPModel(MASTER_KEY_PATH, KEYFILE_PATH, SALT)
