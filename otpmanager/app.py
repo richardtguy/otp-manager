@@ -1,5 +1,5 @@
 import sys
-from PySide6.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication
 from otpmanager.view import OTPUi
 from otpmanager.model import OTPModel
 from otpmanager.ctrl import OTPCtrl

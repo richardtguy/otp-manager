@@ -1,8 +1,8 @@
 import os
 from PIL.ImageQt import ImageQt
-from PySide6.QtGui import QIcon, QPixmap, QImage
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import (
+from PyQt5.QtGui import QIcon, QPixmap, QImage
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QGridLayout, QPushButton, QDialogButtonBox, QLabel,
     QInputDialog, QLineEdit, QMessageBox
 )

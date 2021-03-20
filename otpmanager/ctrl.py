@@ -1,5 +1,5 @@
 from functools import partial
-from PySide6.QtCore import QTimer
+from PyQt5.QtCore import QTimer
 
 from otpmanager.model import MissingKeyFileError
 
