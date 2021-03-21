@@ -1,6 +1,5 @@
-# Master key file
-.otp_master_key
-.otp_keys
+# Keys
+.otp*
 
 # macOS custom attributes
 .DS_Store
@@ -13,8 +12,5 @@ __pycache__/
 # Environment
 venv/
 
-# PyInstaller
-cli.py
-build/
-dist/
-*.spec
+# Dist
+otp

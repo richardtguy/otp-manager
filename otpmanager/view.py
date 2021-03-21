@@ -1,4 +1,5 @@
 import os
+import sys
 from PIL.ImageQt import ImageQt
 from PyQt5.QtGui import QIcon, QPixmap, QImage
 from PyQt5.QtCore import Qt
@@ -11,8 +12,11 @@ class OTPUi(QDialog):
     """
     OTP Manager GUI
     """
-    def __init__(self, icon_path, parent=None):
-        self._icon_path = icon_path
+    def __init__(self, icon_path=None, parent=None):
+        if icon_path == None:
+            self._icon_path = sys.path[0] + '/icons'
+        else:
+            self._icon_path = icon_path
         super(OTPUi, self).__init__(parent)
         self.setWindowTitle("OTP Manager")
         self._mainLayout = QVBoxLayout()
@@ -61,7 +65,6 @@ class OTPUi(QDialog):
                 label = self.rows[account]
             except KeyError:
                 label = self._createRow(account)
-            if otp == None: otp = "Invalid key!"
             label["otpLabel"].setText(otp)
 
     def getPassword(self):
